@@ -1,0 +1,5 @@
+requests
+-e ../../D/datasetter
+black
+textnorm
+-e ../../D/disktree
