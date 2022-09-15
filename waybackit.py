@@ -190,10 +190,16 @@ def main(**kwargs):
     pprint(pids, indent=4)
     archived_pids = list()
     for pid, when in pids.items():
-        status(f"Checking {pid} ({when})", **kwargs)
+        status(f"{pid}: checking {when}", **kwargs)
         if valid(pid):
+            status(f"{pid}: valid", **kwargs)
             if archive(pid, when):
                 archived_pids.append(pid)
+                status(f"{pid}: stale or unarchived - now archived", **kwargs)
+            else:
+                status(f"{pid}: not stale - did nothing", **kwargs)
+        else:
+            logger.error(f"{pid}: Invalid")
     status(f"Archived PIDS: {', '.join(archived_pids)}", **kwargs)
 
 
