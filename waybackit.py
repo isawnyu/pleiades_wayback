@@ -20,6 +20,8 @@ from pprint import pprint
 import re
 import requests
 from requests.adapters import HTTPAdapter
+from requests.exceptions import TooManyRedirects
+from time import sleep
 from urllib3.util.retry import Retry
 
 
@@ -85,6 +87,7 @@ OPTIONAL_ARGUMENTS = [
         "user agent for http request headers",
         False,
     ],
+    ["-c", "--validate", False, "validate pleiades URL before archiving", False],
 ]
 POSITIONAL_ARGUMENTS = [
     # each row is a list with 3 elements: name, type, help
@@ -114,7 +117,21 @@ def archive(pid, since):
     pleiades_uri = f"https://pleiades.stoa.org/places/{pid}"
 
     check_uri = ARCHIVE_CHECK_URI + pleiades_uri
-    r = archive_session.head(check_uri, allow_redirects=True)
+    redirect_failures = 0
+    redirect_backoff = 0
+    while True:
+        try:
+            r = archive_session.head(check_uri, allow_redirects=True)
+        except TooManyRedirects:
+            redirect_failures += 1
+            if redirect_failures > ARCHIVE_MAX_RETRIES:
+                raise
+            redirect_backoff = ARCHIVE_BACKOFF * (
+                2 ** (redirect_failures + ARCHIVE_MAX_REDIRECTS)
+            )
+            sleep(redirect_backoff)
+        else:
+            break
     if r.status_code != 200:
         r.raise_for_status
     logger.debug(f"Wayback check for {check_uri}: {r.status_code}")
@@ -146,6 +163,7 @@ def set_session_defaults(**kwargs):
     retries = Retry(
         total=ARCHIVE_MAX_RETRIES,
         backoff_factor=ARCHIVE_BACKOFF,
+        respect_retry_after_header=True,
         status_forcelist=ARCHIVE_RETRY_ERRORS,
     )
     s.mount("https://", HTTPAdapter(max_retries=retries))
@@ -158,6 +176,7 @@ def set_session_defaults(**kwargs):
     retries = Retry(
         total=PLEIADES_MAX_RETRIES,
         backoff_factor=PLEIADES_BACKOFF,
+        respect_retry_after_header=True,
         status_forcelist=PLEIADES_RETRY_ERRORS,
     )
     s.mount("https://", HTTPAdapter(max_retries=retries))
@@ -191,14 +210,15 @@ def main(**kwargs):
     archived_pids = list()
     for pid, when in pids.items():
         status(f"{pid}: checking {when}", **kwargs)
-        if valid(pid):
-            status(f"{pid}: valid", **kwargs)
+        if valid(pid) or not kwargs["validate"]:
+            if kwargs["validate"]:
+                status(f"{pid}: valid", **kwargs)
             if archive(pid, when):
                 archived_pids.append(pid)
                 status(f"{pid}: stale or unarchived - now archived", **kwargs)
             else:
                 status(f"{pid}: not stale - did nothing", **kwargs)
-        else:
+        elif kwargs["validate"]:
             logger.error(f"{pid}: Invalid")
     status(f"Archived PIDS: {', '.join(archived_pids)}", **kwargs)
 
