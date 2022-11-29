@@ -20,14 +20,14 @@ from pprint import pprint
 import re
 import requests
 from requests.adapters import HTTPAdapter
-from requests.exceptions import TooManyRedirects
+from requests.exceptions import RetryError, TooManyRedirects
 from time import sleep
 from urllib3.util.retry import Retry
 
 
 ARCHIVE_MAX_REDIRECTS = 6
-ARCHIVE_MAX_RETRIES = 6
-ARCHIVE_BACKOFF = 1
+ARCHIVE_MAX_RETRIES = 8
+ARCHIVE_BACKOFF = 3
 ARCHIVE_RETRY_ERRORS = [429, 500, 502, 503, 504, 520, 523]
 ARCHIVE_CHECK_URI = "https://web.archive.org/web/"
 ARCHIVE_SAVE_URI = "https://web.archive.org/save/"
