@@ -114,22 +114,23 @@ def valid(pid):
 
 def archive(pid, since, pdata, **kwargs):
     pleiades_uri = f"https://pleiades.stoa.org/places/{pid}"
-    archive_names(pdata, **kwargs)
+    archive_children(pdata, **kwargs)
     return _archive_this(pleiades_uri, since)
 
 
-def archive_names(pdata, **kwargs):
-    for name in pdata["names"]:
-        uri = name["uri"]
-        slug = "/".join([p.strip() for p in uri.split("/") if p.strip()][-2:])
-        since = sorted(name["history"], key=lambda h: h["modified"])[-1][
-            "modified"
-        ].split("T")[0]
-        status(f"\t{slug}: checking", **kwargs)
-        if _archive_this(uri, since):
-            status(f"\t{slug}: stale or unarchived - now archived", **kwargs)
-        else:
-            status(f"\t{slug}: not stale - did nothing", **kwargs)
+def archive_children(pdata, **kwargs):
+    for k in ["names", "locations", "connections"]:
+        for child in pdata[k]:
+            uri = child["uri"]
+            slug = "/".join([p.strip() for p in uri.split("/") if p.strip()][-2:])
+            since = sorted(child["history"], key=lambda h: h["modified"])[-1][
+                "modified"
+            ].split("T")[0]
+            status(f"\t{slug}: checking", **kwargs)
+            if _archive_this(uri, since):
+                status(f"\t{slug}: stale or unarchived - now archived", **kwargs)
+            else:
+                status(f"\t{slug}: not stale - did nothing", **kwargs)
 
 
 def _archive_this(uri, since):
