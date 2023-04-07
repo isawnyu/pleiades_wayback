@@ -112,9 +112,21 @@ def valid(pid):
         return True
 
 
-def archive(pid, since):
+def archive(pid, since, pdata, **kwargs):
     pleiades_uri = f"https://pleiades.stoa.org/places/{pid}"
+    archive_names(since, pdata, **kwargs)
     return _archive_this(pleiades_uri, since)
+
+
+def archive_names(since, pdata, **kwargs):
+    for name in pdata["names"]:
+        uri = name["uri"]
+        slug = "/".join([p.strip() for p in uri.split("/") if p.strip()][-2:])
+        status(f"\t{slug}: checking", **kwargs)
+        if _archive_this(name["uri"], since):
+            status(f"\t{slug}: stale or unarchived - now archived", **kwargs)
+        else:
+            status(f"\t{slug}: not stale - did nothing", **kwargs)
 
 
 def _archive_this(uri, since):
@@ -217,7 +229,7 @@ def main(**kwargs):
         if valid(pid) or not kwargs["validate"]:
             if kwargs["validate"]:
                 status(f"{pid}: valid", **kwargs)
-            if archive(pid, when):
+            if archive(pid, when, pd.get(pid)[0], **kwargs):
                 archived_pids.append(pid)
                 status(f"{pid}: stale or unarchived - now archived", **kwargs)
             else:
