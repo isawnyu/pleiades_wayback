@@ -113,10 +113,14 @@ def valid(pid):
 
 
 def archive(pid, since):
-    global archive_session
     pleiades_uri = f"https://pleiades.stoa.org/places/{pid}"
+    return _archive_this(pleiades_uri, since)
 
-    check_uri = ARCHIVE_CHECK_URI + pleiades_uri
+
+def _archive_this(uri, since):
+    global archive_session
+
+    check_uri = ARCHIVE_CHECK_URI + uri
     redirect_failures = 0
     redirect_backoff = 0
     while True:
@@ -135,15 +139,15 @@ def archive(pid, since):
     if r.status_code != 200:
         r.raise_for_status
     logger.debug(f"Wayback check for {check_uri}: {r.status_code}")
-    rx = re.compile(rf"^{ARCHIVE_CHECK_URI}(\d+)/{pleiades_uri}/?.*$")
+    rx = re.compile(rf"^{ARCHIVE_CHECK_URI}(\d+)/{uri}/?.*$")
     m = rx.match(r.url)
     if m is None:
         raise RuntimeError(f"archive check result regex failed: {check_uri} -> {r.url}")
     snapshot = int(m.group(1)[:8])
     archive_it = snapshot < int(since.replace("-", ""))
-    logger.debug(f"{archive_it}: {pleiades_uri} (snapshot={snapshot}, since={since})")
+    logger.debug(f"{archive_it}: {uri} (snapshot={snapshot}, since={since})")
     if archive_it:
-        save_uri = ARCHIVE_SAVE_URI + pleiades_uri
+        save_uri = ARCHIVE_SAVE_URI + uri
         r = archive_session.head(save_uri, allow_redirects=True)
         if r.status_code != 200:
             r.raise_for_status
