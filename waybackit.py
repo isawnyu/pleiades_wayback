@@ -114,16 +114,19 @@ def valid(pid):
 
 def archive(pid, since, pdata, **kwargs):
     pleiades_uri = f"https://pleiades.stoa.org/places/{pid}"
-    archive_names(since, pdata, **kwargs)
+    archive_names(pdata, **kwargs)
     return _archive_this(pleiades_uri, since)
 
 
-def archive_names(since, pdata, **kwargs):
+def archive_names(pdata, **kwargs):
     for name in pdata["names"]:
         uri = name["uri"]
         slug = "/".join([p.strip() for p in uri.split("/") if p.strip()][-2:])
+        since = sorted(name["history"], key=lambda h: h["modified"])[-1][
+            "modified"
+        ].split("T")[0]
         status(f"\t{slug}: checking", **kwargs)
-        if _archive_this(name["uri"], since):
+        if _archive_this(uri, since):
             status(f"\t{slug}: stale or unarchived - now archived", **kwargs)
         else:
             status(f"\t{slug}: not stale - did nothing", **kwargs)
@@ -154,9 +157,13 @@ def _archive_this(uri, since):
     rx = re.compile(rf"^{ARCHIVE_CHECK_URI}(\d+)/{uri}/?.*$")
     m = rx.match(r.url)
     if m is None:
-        raise RuntimeError(f"archive check result regex failed: {check_uri} -> {r.url}")
+        logger.warning(f"archive check result regex failed: {check_uri} -> {r.url}")
+        return False
     snapshot = int(m.group(1)[:8])
-    archive_it = snapshot < int(since.replace("-", ""))
+    try:
+        archive_it = snapshot < int(since.replace("-", ""))
+    except TypeError:
+        archive_it = snapshot < int(since)
     logger.debug(f"{archive_it}: {uri} (snapshot={snapshot}, since={since})")
     if archive_it:
         save_uri = ARCHIVE_SAVE_URI + uri
