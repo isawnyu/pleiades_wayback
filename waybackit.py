@@ -27,7 +27,7 @@ from urllib3.util.retry import Retry
 
 ARCHIVE_MAX_REDIRECTS = 6
 ARCHIVE_MAX_RETRIES = 8
-ARCHIVE_BACKOFF = 3
+ARCHIVE_BACKOFF = 4
 ARCHIVE_RETRY_ERRORS = [429, 500, 502, 503, 504, 520, 523]
 ARCHIVE_CHECK_URI = "https://web.archive.org/web/"
 ARCHIVE_SAVE_URI = "https://web.archive.org/save/"
@@ -114,23 +114,40 @@ def valid(pid):
 
 def archive(pid, since, pdata, **kwargs):
     pleiades_uri = f"https://pleiades.stoa.org/places/{pid}"
-    archive_children(pdata, **kwargs)
+    archive_children(since, pdata, **kwargs)
     return _archive_this(pleiades_uri, since)
 
 
-def archive_children(pdata, **kwargs):
+def archive_children(since, pdata, **kwargs):
     for k in ["names", "locations", "connections"]:
         for child in pdata[k]:
             uri = child["uri"]
             slug = "/".join([p.strip() for p in uri.split("/") if p.strip()][-2:])
-            since = sorted(child["history"], key=lambda h: h["modified"])[-1][
+            latest = sorted(child["history"], key=lambda h: h["modified"])[-1][
                 "modified"
             ].split("T")[0]
-            status(f"\t{slug}: checking", **kwargs)
-            if _archive_this(uri, since):
-                status(f"\t{slug}: stale or unarchived - now archived", **kwargs)
-            else:
-                status(f"\t{slug}: not stale - did nothing", **kwargs)
+            if latest >= since:
+                status(f"\t{slug}: checking", **kwargs)
+                success = False
+                try:
+                    success = _archive_this(uri, since)
+                except TooManyRedirects:
+                    status(
+                        f"\t{slug}: too many redirect errors from archive.org. Skipping.",
+                        **kwargs,
+                    )
+                except RetryError:
+                    status(
+                        f"\t{slug}: too many retry errors from archive.org. Skipping",
+                        **kwargs,
+                    )
+                else:
+                    if success:
+                        status(
+                            f"\t{slug}: stale or unarchived - now archived", **kwargs
+                        )
+                    else:
+                        status(f"\t{slug}: not stale - did nothing", **kwargs)
 
 
 def _archive_this(uri, since):
@@ -149,6 +166,7 @@ def _archive_this(uri, since):
             redirect_backoff = ARCHIVE_BACKOFF * (
                 2 ** (redirect_failures + ARCHIVE_MAX_REDIRECTS)
             )
+            logger.info(f"sleep for redirect {redirect_backoff}")
             sleep(redirect_backoff)
         else:
             break
@@ -168,7 +186,22 @@ def _archive_this(uri, since):
     logger.debug(f"{archive_it}: {uri} (snapshot={snapshot}, since={since})")
     if archive_it:
         save_uri = ARCHIVE_SAVE_URI + uri
-        r = archive_session.head(save_uri, allow_redirects=True)
+        save_failures = 0
+        save_backoff = 0
+        while True:
+            try:
+                r = archive_session.head(save_uri, allow_redirects=True)
+            except RetryError as e:
+                save_failures += 1
+                if save_failures > ARCHIVE_MAX_RETRIES:
+                    raise
+                save_backoff = ARCHIVE_BACKOFF + (
+                    2 ** (save_failures + ARCHIVE_MAX_RETRIES)
+                )
+                logger.info(f"sleep for save {save_backoff}")
+                sleep(save_backoff)
+            else:
+                break
         if r.status_code != 200:
             r.raise_for_status
         return True
