@@ -114,8 +114,13 @@ def valid(pid):
 
 def archive(pid, since, pdata, **kwargs):
     pleiades_uri = f"https://pleiades.stoa.org/places/{pid}"
+    result = _archive_this(pleiades_uri, since)
+    if result:
+        status(f"{pid}: stale or unarchived - now archived", **kwargs)
+    else:
+        status(f"{pid}: not stale - did nothing", **kwargs)
     archive_children(since, pdata, **kwargs)
-    return _archive_this(pleiades_uri, since)
+    return result
 
 
 def archive_children(since, pdata, **kwargs):
@@ -194,10 +199,10 @@ def _archive_this(uri, since):
             except RetryError as e:
                 save_failures += 1
                 if save_failures > ARCHIVE_MAX_RETRIES:
-                    raise
-                save_backoff = ARCHIVE_BACKOFF + (
-                    2 ** (save_failures + ARCHIVE_MAX_RETRIES)
-                )
+                    # raise
+                    logger.error(f"Too many save failures ({save_failures}). Skipping.")
+                    break
+                save_backoff = ARCHIVE_BACKOFF * save_failures
                 logger.info(f"sleep for save {save_backoff}")
                 sleep(save_backoff)
             else:
@@ -272,9 +277,6 @@ def main(**kwargs):
                 status(f"{pid}: valid", **kwargs)
             if archive(pid, when, pd.get(pid)[0], **kwargs):
                 archived_pids.append(pid)
-                status(f"{pid}: stale or unarchived - now archived", **kwargs)
-            else:
-                status(f"{pid}: not stale - did nothing", **kwargs)
         elif kwargs["validate"]:
             logger.error(f"{pid}: Invalid")
     status(f"Archived PIDS: {', '.join(archived_pids)}", **kwargs)
