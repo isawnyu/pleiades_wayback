@@ -270,7 +270,8 @@ def main(**kwargs):
             pids[pid] = k
     pprint(pids, indent=4)
     archived_pids = list()
-    for pid, when in pids.items():
+    pid_list = sorted([(pid, when) for pid, when in pids.items()], key=lambda x: x[1])
+    for pid, when in pid_list:
         status(f"{pid}: checking {when}", **kwargs)
         if valid(pid) or not kwargs["validate"]:
             if kwargs["validate"]:
