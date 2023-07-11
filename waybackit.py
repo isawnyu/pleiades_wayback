@@ -166,11 +166,12 @@ def _archive_this(uri, since):
             r = archive_session.head(check_uri, allow_redirects=True)
         except TooManyRedirects:
             redirect_failures += 1
-            if redirect_failures > ARCHIVE_MAX_RETRIES:
-                raise
-            redirect_backoff = ARCHIVE_BACKOFF * (
-                2 ** (redirect_failures + ARCHIVE_MAX_REDIRECTS)
-            )
+            if redirect_failures > max(round(ARCHIVE_MAX_REDIRECTS / 2), 2):
+                logger.error(
+                    f"Too many redirects ({redirect_failures}) for archive check. Skipping."
+                )
+                return False
+            redirect_backoff = ARCHIVE_BACKOFF * redirect_failures
             logger.info(f"sleep for redirect {redirect_backoff}")
             sleep(redirect_backoff)
         else:
@@ -201,7 +202,7 @@ def _archive_this(uri, since):
                 if save_failures > ARCHIVE_MAX_RETRIES:
                     # raise
                     logger.error(f"Too many save failures ({save_failures}). Skipping.")
-                    break
+                    return False
                 save_backoff = ARCHIVE_BACKOFF * save_failures
                 logger.info(f"sleep for save {save_backoff}")
                 sleep(save_backoff)
