@@ -164,7 +164,7 @@ def _archive_this(uri, since):
     while True:
         try:
             r = archive_session.head(check_uri, allow_redirects=True)
-        except TooManyRedirects:
+        except (RetryError, TooManyRedirects):
             redirect_failures += 1
             if redirect_failures > max(round(ARCHIVE_MAX_REDIRECTS / 2), 2):
                 logger.error(
