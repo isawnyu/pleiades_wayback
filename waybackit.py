@@ -271,10 +271,12 @@ def main(**kwargs):
             pids[pid] = k
     pprint(pids, indent=4)
     archived_pids = list()
+    attempted_pids = list()
     pid_list = sorted([(pid, when) for pid, when in pids.items()], key=lambda x: x[1])
     for pid, when in pid_list:
         status(f"{pid}: checking {when}", **kwargs)
         if valid(pid) or not kwargs["validate"]:
+            attempted_pids.append(pid)
             if kwargs["validate"]:
                 status(f"{pid}: valid", **kwargs)
             if archive(pid, when, pd.get(pid)[0], **kwargs):
@@ -282,6 +284,8 @@ def main(**kwargs):
         elif kwargs["validate"]:
             logger.error(f"{pid}: Invalid")
     status(f"Archived PIDS: {', '.join(archived_pids)}", **kwargs)
+    status(f"Attempted: {len(attempted_pids)}", **kwargs)
+    status(f"Archived: {len(archived_pids)}", **kwargs)
 
 
 if __name__ == "__main__":
