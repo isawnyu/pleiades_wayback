@@ -119,11 +119,19 @@ def archive(pid, since, pdata, **kwargs):
         status(f"{pid}: stale or unarchived - now archived", **kwargs)
     else:
         status(f"{pid}: not stale - did nothing", **kwargs)
-    archive_children(since, pdata, **kwargs)
-    return result
+    # json
+    result_j = _archive_this(pleiades_uri + "/json", since)
+    if result_j:
+        status(f"\tJSON: stale or unarchived - now archived", **kwargs)
+    else:
+        status(f"\tJSON: not stale - did nothing", **kwargs)
+
+    result_c = archive_children(since, pdata, **kwargs)
+    return result | result_j | result_c
 
 
 def archive_children(since, pdata, **kwargs):
+    result = False
     for k in ["names", "locations", "connections"]:
         for child in pdata[k]:
             uri = child["uri"]
@@ -153,6 +161,8 @@ def archive_children(since, pdata, **kwargs):
                         )
                     else:
                         status(f"\t{slug}: not stale - did nothing", **kwargs)
+                result = result | success
+    return result
 
 
 def _archive_this(uri, since):
