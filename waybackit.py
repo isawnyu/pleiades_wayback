@@ -20,7 +20,7 @@ from pprint import pprint
 import re
 import requests
 from requests.adapters import HTTPAdapter
-from requests.exceptions import RetryError, TooManyRedirects
+from requests.exceptions import RetryError, TooManyRedirects, ConnectionError
 from time import sleep
 from urllib3.util.retry import Retry
 
@@ -184,9 +184,6 @@ def _archive_this(uri, since):
                     f"Too many redirects, retries, and/or connection errors ({redirect_failures}) for archive check. Skipping."
                 )
                 return False
-            redirect_backoff = ARCHIVE_BACKOFF * redirect_failures
-            logger.info(f"sleep for redirect {redirect_backoff}")
-            sleep(redirect_backoff)
         else:
             break
     if r.status_code != 200:
