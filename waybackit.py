@@ -25,7 +25,7 @@ from time import sleep
 from urllib3.util.retry import Retry
 
 ITERATIVE_DELAY_FACTOR = 17
-MAX_TOTAL_FAILURES = 3
+MAX_TOTAL_FAILURES = 13
 INTERSTITIAL_DELAY = 3
 
 ARCHIVE_MAX_REDIRECTS = 6
@@ -349,8 +349,8 @@ def main(**kwargs):
                             f"\n>>>>> Too many total failures ({total_failures}). Quitting.",
                         )
                         break
-                    sleep_time = max(ARCHIVE_OUTER_BACKOFF, ITERATIVE_DELAY_FACTOR) * (
-                        total_failures + 1
+                    sleep_time = ARCHIVE_OUTER_BACKOFF * (
+                        total_failures / len(attempted_pids) + 1.0
                     )
                     status(
                         f"   - Sleeping for {sleep_time} seconds in hopes things get better.",
@@ -364,8 +364,6 @@ def main(**kwargs):
                     **kwargs,
                 )
                 sleep(sleep_time)
-                global INTERSTITIAL_DELAY
-                INTERSTITIAL_DELAY = INTERSTITIAL_DELAY * (total_failures + 1)
             elif kwargs["validate"]:
                 logger.error(f"{pid}: Invalid")
     except KeyboardInterrupt:
