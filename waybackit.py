@@ -24,10 +24,15 @@ from requests.exceptions import RetryError, TooManyRedirects, ConnectionError
 from time import sleep
 from urllib3.util.retry import Retry
 
+ITERATIVE_DELAY_FACTOR = 17
+MAX_TOTAL_FAILURES = 3
+INTERSTITIAL_DELAY = 3
 
 ARCHIVE_MAX_REDIRECTS = 6
-ARCHIVE_MAX_RETRIES = 8
-ARCHIVE_BACKOFF = 4
+ARCHIVE_MAX_RETRIES = 3
+ARCHIVE_BACKOFF = 23
+ARCHIVE_OUTER_RETRIES = 3
+ARCHIVE_OUTER_BACKOFF = 467
 ARCHIVE_RETRY_ERRORS = [429, 500, 502, 503, 504, 520, 523]
 ARCHIVE_CHECK_URI = "https://web.archive.org/web/"
 ARCHIVE_SAVE_URI = "https://web.archive.org/save/"
@@ -83,15 +88,22 @@ OPTIONAL_ARGUMENTS = [
     [
         "-u",
         "--useragent",
-        f"PleiadesGazetteer/{today.isoformat()} (+https://pleiades.stoa.org)",
+        f"PleiadesGazetteerWaybackBot/0.3 (+https://pleiades.stoa.org)",
         "user agent for http request headers",
         False,
     ],
     ["-c", "--validate", False, "validate pleiades URL before archiving", False],
+    ["-p", "--pause", 0.0, "pause float seconds between requests", False],
 ]
 POSITIONAL_ARGUMENTS = [
     # each row is a list with 3 elements: name, type, help
 ]
+
+
+class TotalFailure(Exception):
+    def __init__(self, msg: str, uri: str):
+        self.uri = uri
+        super().__init__(msg)
 
 
 def status(msg: str, **kwargs):
@@ -114,18 +126,24 @@ def valid(pid):
 
 def archive(pid, since, pdata, **kwargs):
     pleiades_uri = f"https://pleiades.stoa.org/places/{pid}"
-    result = _archive_this(pleiades_uri, since)
-    if result:
-        status(f"{pid}: stale or unarchived - now archived", **kwargs)
-    else:
-        status(f"{pid}: not stale - did nothing", **kwargs)
-    # json
-    result_j = _archive_this(pleiades_uri + "/json", since)
-    if result_j:
-        status(f"\tJSON: stale or unarchived - now archived", **kwargs)
-    else:
-        status(f"\tJSON: not stale - did nothing", **kwargs)
-
+    status(
+        "\n"
+        + "=" * 78
+        + "\n"
+        + f"Checking archive status since {since} of {pleiades_uri} and its subordinate components.",
+        **kwargs,
+    )
+    status(
+        "-" * 78 + "\n" f"Verifying archive status since {since} of {pleiades_uri}.",
+        **kwargs,
+    )
+    result = _archive_this(pleiades_uri, since, **kwargs)
+    sleep(INTERSTITIAL_DELAY)
+    juri = pleiades_uri + "/json"
+    status(
+        "-" * 78 + "\n" f"Verifying archive status since {since} of {juri}.", **kwargs
+    )
+    result_j = _archive_this(pleiades_uri + "/json", since, **kwargs)
     result_c = archive_children(since, pdata, **kwargs)
     return result | result_j | result_c
 
@@ -140,34 +158,24 @@ def archive_children(since, pdata, **kwargs):
                 "modified"
             ].split("T")[0]
             if latest >= since:
-                status(f"\t{slug}: checking", **kwargs)
+                status(
+                    "-" * 78 + "\n" f"Verifying archive status since {since} of {uri}.",
+                    **kwargs,
+                )
+                sleep(INTERSTITIAL_DELAY)
                 success = False
                 try:
-                    success = _archive_this(uri, since)
-                except TooManyRedirects:
-                    status(
-                        f"\t{slug}: too many redirect errors from archive.org. Skipping.",
-                        **kwargs,
-                    )
-                except RetryError:
-                    status(
-                        f"\t{slug}: too many retry errors from archive.org. Skipping",
-                        **kwargs,
-                    )
-                else:
-                    if success:
-                        status(
-                            f"\t{slug}: stale or unarchived - now archived", **kwargs
-                        )
-                    else:
-                        status(f"\t{slug}: not stale - did nothing", **kwargs)
+                    success = _archive_this(uri, since, **kwargs)
+                except (TooManyRedirects, RetryError):
+                    pass
                 result = result | success
     return result
 
 
-def _archive_this(uri, since):
+def _archive_this(uri, since, **kwargs):
     global archive_session
 
+    # see if the URI is already in the archive
     check_uri = ARCHIVE_CHECK_URI + uri
     redirect_failures = 0
     redirect_backoff = 0
@@ -176,51 +184,87 @@ def _archive_this(uri, since):
             r = archive_session.head(check_uri, allow_redirects=True)
         except (RetryError, TooManyRedirects, ConnectionError):
             redirect_failures += 1
-            redirect_backoff = ARCHIVE_BACKOFF * redirect_failures
-            logger.info(f"sleep for redirect {redirect_backoff}")
-            sleep(redirect_backoff)
-            if redirect_failures > max(round(ARCHIVE_MAX_REDIRECTS / 2), 2):
-                logger.error(
-                    f"Too many redirects, retries, and/or connection errors ({redirect_failures}) for archive check. Skipping."
+            if redirect_failures > max(round(ARCHIVE_OUTER_RETRIES / 2), 2):
+                raise TotalFailure(
+                    f"Too many redirects, retries, and/or connection errors ({redirect_failures}) "
+                    f"while trying {check_uri}.",
+                    check_uri,
                 )
-                return False
+            redirect_backoff = ARCHIVE_OUTER_BACKOFF * redirect_failures
+            sleep_time = max(redirect_backoff, kwargs["pause"])
+            status(
+                f"   - Wayback check attempt failed after {ARCHIVE_MAX_RETRIES} retries. Sleeping for {sleep_time} seconds before next attempt...",
+                **kwargs,
+            )
+            sleep(sleep_time)
         else:
             break
     if r.status_code != 200:
         r.raise_for_status
-    logger.debug(f"Wayback check for {check_uri}: {r.status_code}")
     rx = re.compile(rf"^{ARCHIVE_CHECK_URI}(\d+)/{uri}/?.*$")
     m = rx.match(r.url)
     if m is None:
-        logger.warning(f"archive check result regex failed: {check_uri} -> {r.url}")
-        return False
-    snapshot = int(m.group(1)[:8])
+        # No it is not
+        status(f"   - Resource not yet archived.", **kwargs)
+    else:
+        status(f"   - A version of this resource is already in the archive.", **kwargs)
+
+    # if in archive, see if it is up-to-date
     try:
-        archive_it = snapshot < int(since.replace("-", ""))
-    except TypeError:
-        archive_it = snapshot < int(since)
-    logger.debug(f"{archive_it}: {uri} (snapshot={snapshot}, since={since})")
+        snapshot = int(m.group(1)[:8])
+    except AttributeError:
+        archive_it = True
+    else:
+        try:
+            archive_it = snapshot < int(since.replace("-", ""))
+        except TypeError:
+            archive_it = snapshot < int(since)
+        if archive_it:
+            status(
+                f"   - Resource copy in archive is out-of-date.",
+                **kwargs,
+            )
     if archive_it:
+        status(
+            f"   - Attempting to archive new version.",
+            **kwargs,
+        )
         save_uri = ARCHIVE_SAVE_URI + uri
         save_failures = 0
-        save_backoff = 0
+        save_backoff = max(0, redirect_backoff)
+        sleep_time = max(save_backoff, kwargs["pause"])
+        if sleep_time > 0:
+            status(
+                f"   - Sleeping for {sleep_time} seconds before sending save request to the archive api.",
+                **kwargs,
+            )
+            sleep(sleep_time)
         while True:
             try:
                 r = archive_session.head(save_uri, allow_redirects=True)
-            except RetryError as e:
+            except (RetryError, TooManyRedirects, ConnectionError) as e:
                 save_failures += 1
-                if save_failures > ARCHIVE_MAX_RETRIES:
-                    # raise
-                    logger.error(f"Too many save failures ({save_failures}). Skipping.")
-                    return False
-                save_backoff = ARCHIVE_BACKOFF * save_failures
-                logger.info(f"sleep for save {save_backoff}")
-                sleep(save_backoff)
+                if save_failures > ARCHIVE_OUTER_RETRIES:
+                    raise TotalFailure(
+                        f"Too many redirects, retries, and/or connection errors ({save_failures}) "
+                        f"while trying {save_uri}.",
+                        save_uri,
+                    )
+                save_backoff = ARCHIVE_OUTER_RETRIES * save_failures
+                sleep_time = max(save_backoff, kwargs["pause"])
+                if sleep_time > 0:
+                    status(
+                        f"   - Wayback save attempt failed after {ARCHIVE_MAX_RETRIES}. Sleeping for {sleep_time} seconds before next attempt...",
+                        **kwargs,
+                    )
+                    sleep(sleep_time)
             else:
                 break
         if r.status_code != 200:
             r.raise_for_status
+        status(f"   - Successfully saved up-to-date snapshot in the archive.", **kwargs)
         return True
+    status(f"   - There is already an up-to-date snapshot in the archive.", **kwargs)
     return False
 
 
@@ -238,6 +282,7 @@ def set_session_defaults(**kwargs):
         backoff_factor=ARCHIVE_BACKOFF,
         respect_retry_after_header=True,
         status_forcelist=ARCHIVE_RETRY_ERRORS,
+        backoff_jitter=ARCHIVE_BACKOFF / 2,
     )
     s.mount("https://", HTTPAdapter(max_retries=retries))
     s.mount("http://", HTTPAdapter(max_retries=retries))
@@ -282,20 +327,56 @@ def main(**kwargs):
     pprint(pids, indent=4)
     archived_pids = list()
     attempted_pids = list()
+    skipped_uris = list()
+    total_failures = 0
     pid_list = sorted([(pid, when) for pid, when in pids.items()], key=lambda x: x[1])
-    for pid, when in pid_list:
-        status(f"{pid}: checking {when}", **kwargs)
-        if valid(pid) or not kwargs["validate"]:
-            attempted_pids.append(pid)
-            if kwargs["validate"]:
-                status(f"{pid}: valid", **kwargs)
-            if archive(pid, when, pd.get(pid)[0], **kwargs):
-                archived_pids.append(pid)
-        elif kwargs["validate"]:
-            logger.error(f"{pid}: Invalid")
+    try:
+        for pid, when in pid_list:
+            # status(f"{pid}: checking {when}", **kwargs)
+            if valid(pid) or not kwargs["validate"]:
+                attempted_pids.append(pid)
+                if kwargs["validate"]:
+                    status(f"{pid}: valid", **kwargs)
+                try:
+                    if archive(pid, when, pd.get(pid)[0], **kwargs):
+                        archived_pids.append(pid)
+                except TotalFailure as err:
+                    logger.error(str(err))
+                    skipped_uris.append(err.uri)
+                    total_failures += 1
+                    if total_failures > MAX_TOTAL_FAILURES:
+                        logger.fatal(
+                            f"\n>>>>> Too many total failures ({total_failures}). Quitting.",
+                        )
+                        break
+                    sleep_time = max(ARCHIVE_OUTER_BACKOFF, ITERATIVE_DELAY_FACTOR) * (
+                        total_failures + 1
+                    )
+                    status(
+                        f"   - Sleeping for {sleep_time} seconds in hopes things get better.",
+                        **kwargs,
+                    )
+                    sleep(sleep_time)
+                    continue
+                sleep_time = ITERATIVE_DELAY_FACTOR * (total_failures + 1)
+                status(
+                    f"\nSleeping for {sleep_time} before processing next place.",
+                    **kwargs,
+                )
+                sleep(sleep_time)
+                global INTERSTITIAL_DELAY
+                INTERSTITIAL_DELAY = INTERSTITIAL_DELAY * (total_failures + 1)
+            elif kwargs["validate"]:
+                logger.error(f"{pid}: Invalid")
+    except KeyboardInterrupt:
+        status("Manual termination.", **kwargs)
+
     status(f"Archived PIDS: {', '.join(archived_pids)}", **kwargs)
     status(f"Attempted: {len(attempted_pids)}", **kwargs)
     status(f"Archived: {len(archived_pids)}", **kwargs)
+    status(f"Skipped URIs: {len(skipped_uris)}", **kwargs)
+    for suri in skipped_uris:
+        status(f" - {suri}", **kwargs)
 
 
 if __name__ == "__main__":
