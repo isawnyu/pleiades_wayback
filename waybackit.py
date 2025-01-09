@@ -24,14 +24,14 @@ from requests.exceptions import RetryError, TooManyRedirects, ConnectionError
 from time import sleep
 from urllib3.util.retry import Retry
 
-ITERATIVE_DELAY_FACTOR = 17
+ITERATIVE_DELAY_FACTOR = 13
 MAX_TOTAL_FAILURES = 13
-INTERSTITIAL_DELAY = 3
+INTERSTITIAL_DELAY = 5
 
 ARCHIVE_MAX_REDIRECTS = 6
 ARCHIVE_MAX_RETRIES = 3
 ARCHIVE_BACKOFF = 23
-ARCHIVE_OUTER_RETRIES = 3
+ARCHIVE_OUTER_RETRIES = 23
 ARCHIVE_OUTER_BACKOFF = 467
 ARCHIVE_RETRY_ERRORS = [429, 500, 502, 503, 504, 520, 523]
 ARCHIVE_CHECK_URI = "https://web.archive.org/web/"
@@ -184,7 +184,7 @@ def _archive_this(uri, since, **kwargs):
             r = archive_session.head(check_uri, allow_redirects=True)
         except (RetryError, TooManyRedirects, ConnectionError):
             redirect_failures += 1
-            if redirect_failures > max(round(ARCHIVE_OUTER_RETRIES / 2), 2):
+            if redirect_failures > max(round(ARCHIVE_MAX_RETRIES / 2), 2):
                 raise TotalFailure(
                     f"Too many redirects, retries, and/or connection errors ({redirect_failures}) "
                     f"while trying {check_uri}.",
@@ -244,7 +244,7 @@ def _archive_this(uri, since, **kwargs):
                 r = archive_session.head(save_uri, allow_redirects=True)
             except (RetryError, TooManyRedirects, ConnectionError) as e:
                 save_failures += 1
-                if save_failures > ARCHIVE_OUTER_RETRIES:
+                if save_failures > ARCHIVE_MAX_RETRIES:
                     raise TotalFailure(
                         f"Too many redirects, retries, and/or connection errors ({save_failures}) "
                         f"while trying {save_uri}.",
@@ -254,7 +254,7 @@ def _archive_this(uri, since, **kwargs):
                 sleep_time = max(save_backoff, kwargs["pause"])
                 if sleep_time > 0:
                     status(
-                        f"   - Wayback save attempt failed after {ARCHIVE_MAX_RETRIES}. Sleeping for {sleep_time} seconds before next attempt...",
+                        f"   - Wayback save attempt failed after {ARCHIVE_MAX_RETRIES} retries. Sleeping for {sleep_time} seconds before next attempt...",
                         **kwargs,
                     )
                     sleep(sleep_time)
@@ -358,7 +358,9 @@ def main(**kwargs):
                     )
                     sleep(sleep_time)
                     continue
-                sleep_time = ITERATIVE_DELAY_FACTOR * (total_failures + 1)
+                sleep_time = ITERATIVE_DELAY_FACTOR + ITERATIVE_DELAY_FACTOR * (
+                    total_failures / len(attempted_pids)
+                )
                 status(
                     f"\nSleeping for {sleep_time} before processing next place.",
                     **kwargs,
