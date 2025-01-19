@@ -24,7 +24,7 @@ from requests.exceptions import RetryError, TooManyRedirects, ConnectionError
 from time import sleep
 from urllib3.util.retry import Retry
 
-ITERATIVE_DELAY_FACTOR = 13
+ITERATIVE_DELAY_FACTOR = 3
 MAX_TOTAL_FAILURES = 13
 INTERSTITIAL_DELAY = 5
 
