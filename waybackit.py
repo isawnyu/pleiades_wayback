@@ -26,10 +26,11 @@ from urllib3.util.retry import Retry
 
 ITERATIVE_DELAY_FACTOR = 3
 MAX_TOTAL_FAILURES = 13
-INTERSTITIAL_DELAY = 5
+INTERSTITIAL_DELAY = 1
 
 ARCHIVE_MAX_REDIRECTS = 6
 ARCHIVE_MAX_RETRIES = 3
+ARCHIVE_JSON_BACKOFF = 1
 ARCHIVE_BACKOFF = 23
 ARCHIVE_OUTER_RETRIES = 23
 ARCHIVE_OUTER_BACKOFF = 467
@@ -48,6 +49,7 @@ last_week = today - timedelta(days=7)
 
 pleiades_session = None
 archive_session = None
+total_failures = 0
 
 DEFAULT_LOG_LEVEL = logging.WARNING
 OPTIONAL_ARGUMENTS = [
@@ -138,7 +140,10 @@ def archive(pid, since, pdata, **kwargs):
         **kwargs,
     )
     result = _archive_this(pleiades_uri, since, **kwargs)
-    sleep(INTERSTITIAL_DELAY)
+    if result:
+        sleep(INTERSTITIAL_DELAY + total_failures * ARCHIVE_JSON_BACKOFF)
+    else:
+        sleep(INTERSTITIAL_DELAY)
     juri = pleiades_uri + "/json"
     status(
         "-" * 78 + "\n" f"Verifying archive status since {since} of {juri}.", **kwargs
@@ -308,7 +313,7 @@ def main(**kwargs):
     """
     pprint(kwargs, indent=4)
     set_session_defaults(**kwargs)
-
+    global total_failures
     status(
         f"Verifying archival status of all changes between {kwargs['start']} and {kwargs['end']} (inclusive)",
         **kwargs,
@@ -328,7 +333,6 @@ def main(**kwargs):
     archived_pids = list()
     attempted_pids = list()
     skipped_uris = list()
-    total_failures = 0
     pid_list = sorted([(pid, when) for pid, when in pids.items()], key=lambda x: x[1])
     try:
         for pid, when in pid_list:
