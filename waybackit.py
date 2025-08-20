@@ -24,12 +24,12 @@ from requests.exceptions import RetryError, TooManyRedirects, ConnectionError
 from time import sleep
 from urllib3.util.retry import Retry
 
-ITERATIVE_DELAY_FACTOR = 3
+ITERATIVE_DELAY_FACTOR = 2.3
 MAX_TOTAL_FAILURES = 13
-INTERSTITIAL_DELAY = 1
+INTERSTITIAL_DELAY = 0.3
 
 ARCHIVE_MAX_REDIRECTS = 6
-ARCHIVE_MAX_RETRIES = 3
+ARCHIVE_MAX_RETRIES = 2
 ARCHIVE_JSON_BACKOFF = 1
 ARCHIVE_BACKOFF = 23
 ARCHIVE_OUTER_RETRIES = 23
@@ -144,13 +144,15 @@ def archive(pid, since, pdata, **kwargs):
         sleep(INTERSTITIAL_DELAY + total_failures * ARCHIVE_JSON_BACKOFF)
     else:
         sleep(INTERSTITIAL_DELAY)
-    juri = pleiades_uri + "/json"
-    status(
-        "-" * 78 + "\n" f"Verifying archive status since {since} of {juri}.", **kwargs
-    )
-    result_j = _archive_this(pleiades_uri + "/json", since, **kwargs)
+    # juri = pleiades_uri + "/json"
+    # status(
+    #    "-" * 78 + "\n" f"Verifying archive status since {since} of {juri}.", **kwargs
+    #
+    # result_j = _archive_this(pleiades_uri + "/json", since, **kwargs)
     result_c = archive_children(since, pdata, **kwargs)
-    return result | result_j | result_c
+    # return result | result_j | result_c
+    # return result
+    return result | result_c
 
 
 def archive_children(since, pdata, **kwargs):
@@ -184,51 +186,48 @@ def _archive_this(uri, since, **kwargs):
     check_uri = ARCHIVE_CHECK_URI + uri
     redirect_failures = 0
     redirect_backoff = 0
+    archive_it = False
     while True:
         try:
             r = archive_session.head(check_uri, allow_redirects=True)
         except (RetryError, TooManyRedirects, ConnectionError):
-            redirect_failures += 1
-            if redirect_failures > max(round(ARCHIVE_MAX_RETRIES / 2), 2):
-                raise TotalFailure(
-                    f"Too many redirects, retries, and/or connection errors ({redirect_failures}) "
-                    f"while trying {check_uri}.",
-                    check_uri,
-                )
-            redirect_backoff = ARCHIVE_OUTER_BACKOFF * redirect_failures
-            sleep_time = max(redirect_backoff, kwargs["pause"])
             status(
-                f"   - Wayback check attempt failed after {ARCHIVE_MAX_RETRIES} retries. Sleeping for {sleep_time} seconds before next attempt...",
+                f"   - Wayback check attempt failed after {ARCHIVE_MAX_RETRIES} retries. Forcing an archive attempt.",
                 **kwargs,
             )
-            sleep(sleep_time)
+            archive_it = True
+            break
         else:
             break
-    if r.status_code != 200:
-        r.raise_for_status
-    rx = re.compile(rf"^{ARCHIVE_CHECK_URI}(\d+)/{uri}/?.*$")
-    m = rx.match(r.url)
-    if m is None:
-        # No it is not
-        status(f"   - Resource not yet archived.", **kwargs)
-    else:
-        status(f"   - A version of this resource is already in the archive.", **kwargs)
-
-    # if in archive, see if it is up-to-date
-    try:
-        snapshot = int(m.group(1)[:8])
-    except AttributeError:
-        archive_it = True
-    else:
-        try:
-            archive_it = snapshot < int(since.replace("-", ""))
-        except TypeError:
-            archive_it = snapshot < int(since)
-        if archive_it:
+    if not archive_it:
+        if r.status_code != 200:
+            r.raise_for_status
+        rx = re.compile(rf"^{ARCHIVE_CHECK_URI}(\d+)/{uri}/?.*$")
+        m = rx.match(r.url)
+        if m is None:
+            # No it is not
+            status(f"   - Resource not yet archived.", **kwargs)
+            archive_it = True
+        else:
             status(
-                f"   - Resource copy in archive is out-of-date.",
-                **kwargs,
+                f"   - A version of this resource is already in the archive.", **kwargs
             )
+            # if in archive, see if it is up-to-date
+            try:
+                snapshot = int(m.group(1)[:8])
+            except AttributeError:
+                archive_it = True
+            else:
+                try:
+                    archive_it = snapshot < int(since.replace("-", ""))
+                except TypeError:
+                    archive_it = snapshot < int(since)
+                if archive_it:
+                    status(
+                        f"   - Resource copy in archive is out-of-date.",
+                        **kwargs,
+                    )
+
     if archive_it:
         status(
             f"   - Attempting to archive new version.",
@@ -248,21 +247,10 @@ def _archive_this(uri, since, **kwargs):
             try:
                 r = archive_session.head(save_uri, allow_redirects=True)
             except (RetryError, TooManyRedirects, ConnectionError) as e:
-                save_failures += 1
-                if save_failures > ARCHIVE_MAX_RETRIES:
-                    raise TotalFailure(
-                        f"Too many redirects, retries, and/or connection errors ({save_failures}) "
-                        f"while trying {save_uri}.",
-                        save_uri,
-                    )
-                save_backoff = ARCHIVE_OUTER_RETRIES * save_failures
-                sleep_time = max(save_backoff, kwargs["pause"])
-                if sleep_time > 0:
-                    status(
-                        f"   - Wayback save attempt failed after {ARCHIVE_MAX_RETRIES} retries. Sleeping for {sleep_time} seconds before next attempt...",
-                        **kwargs,
-                    )
-                    sleep(sleep_time)
+                raise TotalFailure(
+                    f"   - Too many redirects, retries, and/or connection errors while trying to save {save_uri} ... skipping",
+                    save_uri,
+                )
             else:
                 break
         if r.status_code != 200:
